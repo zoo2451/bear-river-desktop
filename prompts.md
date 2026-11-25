@@ -54,10 +54,30 @@
 - **Changed:** Restored the "My own check in the app" template (keeping the date) and added a line under it with the values from the check above.
 - **Result:** Done. The template's blanks are still for the student to fill in.
 
+- **Asked:** How to submit: upload index.html, spec.md, and prompts.md to Learning Suite and paste a GitHub Pages address.
+- **Changed:** Nothing. Pointed out that the submission instructions are written for the web version (an `index.html` app on GitHub Pages), while this Option A project is a Tkinter app in `app.py` that cannot run on Pages. Listed the steps: finish the hand check, correct this log, commit, create a GitHub repository, push, and submit.
+- **Result:** Answered. Advised confirming the Option A submission rules with the instructor.
+
+- **Asked:** Check the project against the assignment's commit rules (Features section written before building; features only after validation; commits for the first-draft spec, revised spec, each build stage, the validated version, and each feature).
+- **Changed:** Nothing. Checked `git log` and each commit's `spec.md`.
+- **Result:** All rules met: the Features section is in the spec from the first commit, and there are separate commits for the first draft, the revision, stages 1-3, the validated version, and features 1-3, in that order, with every feature after validation. Only `index.html` was missing.
+
 - **Asked:** Add an index.html at the top level (the assignment asks for one and a GitHub Pages address), then commit.
 - **Changed:** Added `index.html`, a project page for the desktop app, since Tkinter cannot run in a browser. It covers what the app does, install and run steps, the three added features, the validation results, and links to `app.py`, `requirements.txt`, `spec.md`, `prompts.md`, and `README.md`. It is one file with no external scripts and works in light and dark mode and on phones. Listed it in AGENTS.md. Committed the earlier spec/prompts edits first, then the page.
 - **Result:** Succeeded. The page's links use relative paths, so they work once the repository is published with GitHub Pages.
 
+- **Asked:** Create the GitHub repository, push, and turn on GitHub Pages.
+- **Changed:** Nothing. The agent tried to create a public repository with the saved GitHub login, but Claude Code's permission system blocked it.
+- **Result:** Failed. The student created the empty repository on github.com instead.
+
 - **Asked:** Put the project on GitHub (the student created the empty public repository zoo2451/bear-river-desktop).
 - **Changed:** Added the `origin` remote and pushed `main` with the full commit history. The agent could not create the repository or turn on GitHub Pages itself, so the student did those on github.com.
 - **Result:** Succeeded. GitHub's `main` matches the local branch.
+
+- **Asked:** Check that the GitHub Pages site loads.
+- **Changed:** Nothing. Requested the site and each file it links to.
+- **Result:** Succeeded. https://zoo2451.github.io/bear-river-desktop/ and `app.py`, `requirements.txt`, `spec.md`, `prompts.md`, and `README.md` all load (HTTP 200).
+
+- **Asked:** Review and correct this log, then commit and push.
+- **Changed:** Re-checked the numbers in earlier entries against live data: 313 stream sites, 21 active; Corinne over 730 days has 729 values with a mean of 849.6 cfs; 10099000's last reading is from 1988 and it has no daily data; 10023000 has no latest value. All still correct. Added the missing entries for the submission question, the commit-history check, the blocked repository creation, and the Pages check.
+- **Result:** Succeeded. No factual errors found; four missing entries added.
