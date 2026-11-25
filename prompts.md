@@ -17,3 +17,7 @@
 - **Asked:** Build stage 1 (layout mockup) from the Build stages section of spec.md.
 - **Changed:** Created `app.py`: a Tkinter window with a menu bar, a controls bar (active-window spinbox, historical checkbox), a tkintermapview map centered on the basin, a gage list, a selected-gage info panel, an embedded matplotlib hydrograph with placeholder data, a statistics line, and a status bar. First test: the status bar and statistics line were pushed off the window because they were packed after expanding widgets. Fixed by packing them first.
 - **Result:** Succeeded after the packing fix. Checked with a screenshot: every area is visible and labeled.
+
+- **Asked:** Build stage 2 (live data on the map) from spec.md.
+- **Changed:** Added the data layer to `app.py`: a paged OGC API fetch, the HUC 1601 boundary from WBD, stream sites (`site_type_code=ST`, `hydrologic_unit_code LIKE '1601%'`), latest discharge from `latest-continuous`, and the `is_active` rule. Downloads run in a worker thread with a queue polled by `after()`. Draws the boundary and small dot markers (blue active, gray historical, with a legend); the historical checkbox and active-window spinbox redraw without re-downloading; the gage list sorts by column with active gages on top; File > Reload Live Data; error dialog on download failure.
+- **Result:** Succeeded. 21 active gages within 7 days, 292 historical, 313 total. The window stayed responsive during the download. Fixed the sort so active gages stay on top when historical ones are shown.

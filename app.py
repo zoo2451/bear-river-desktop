@@ -4,28 +4,150 @@ Run with:  python app.py
 See spec.md for requirements.
 """
 
+import math
+import queue
+import threading
 import tkinter as tk
+from datetime import datetime, timezone
 from tkinter import ttk
+from zoneinfo import ZoneInfo
 
+import requests
 import tkintermapview
+from PIL import Image, ImageDraw, ImageTk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 APP_TITLE = "Bear River Gage Explorer"
 BASIN_CENTER = (41.8, -111.6)  # lat, lon
+MOUNTAIN = ZoneInfo("America/Denver")
+TIMEOUT_S = 30
+
+# ---------------------------------------------------------------- data sources
+OGC = "https://api.waterdata.usgs.gov/ogcapi/v0/collections"
+WBD_URL = "https://hydro.nationalmap.gov/arcgis/rest/services/wbd/MapServer/2/query"
+BASIN_BBOX = "-112.9,40.6,-110.4,43.1"  # lon/lat box that encloses HUC 1601
+STATE_NAMES = {"16": "Idaho", "49": "Utah", "56": "Wyoming"}
 
 
+def fetch_features(url, params):
+    """GET an OGC API collection, following 'next' links until every page is read."""
+    features = []
+    params = dict(params)
+    while url:
+        r = requests.get(url, params=params, timeout=TIMEOUT_S)
+        r.raise_for_status()
+        data = r.json()
+        features.extend(data.get("features", []))
+        url = next((ln["href"] for ln in data.get("links", []) if ln.get("rel") == "next"), None)
+        params = None  # the next link already holds the query string
+    return features
+
+
+def fetch_boundary():
+    """HUC 1601 boundary as a list of rings, each a list of (lat, lon)."""
+    params = {"where": "huc4='1601'", "outFields": "huc4,name", "f": "geojson",
+              "outSR": "4326", "maxAllowableOffset": "0.003"}
+    r = requests.get(WBD_URL, params=params, timeout=TIMEOUT_S)
+    r.raise_for_status()
+    geom = r.json()["features"][0]["geometry"]
+    polys = [geom["coordinates"]] if geom["type"] == "Polygon" else geom["coordinates"]
+    return [[(lat, lon) for lon, lat in poly[0]] for poly in polys]  # outer rings only
+
+
+def fetch_sites():
+    """Every USGS stream site in HUC 1601, as a dict keyed by monitoring location id."""
+    feats = fetch_features(f"{OGC}/monitoring-locations/items", {
+        "f": "json", "limit": 1000, "site_type_code": "ST",
+        "filter": "hydrologic_unit_code LIKE '1601%'", "filter-lang": "cql-text"})
+    sites = {}
+    for f in feats:
+        p, g = f["properties"], f.get("geometry")
+        if not g:
+            continue
+        lon, lat = g["coordinates"][:2]
+        sites[f["id"]] = {
+            "id": f["id"],
+            "site": p.get("monitoring_location_number") or f["id"].split("-", 1)[-1],
+            "name": p.get("monitoring_location_name") or "",
+            "state": STATE_NAMES.get(p.get("state_code"), p.get("state_name") or ""),
+            "drainage_area": p.get("drainage_area"),
+            "lat": lat, "lon": lon,
+            "latest_value": None, "latest_time": None,
+        }
+    return sites
+
+
+def fetch_latest(sites):
+    """Attach the latest discharge (00060) reading to each site in place."""
+    feats = fetch_features(f"{OGC}/latest-continuous/items", {
+        "f": "json", "limit": 1000, "parameter_code": "00060",
+        "bbox": BASIN_BBOX, "skipGeometry": "true"})
+    for f in feats:
+        p = f["properties"]
+        s = sites.get(p.get("monitoring_location_id"))
+        if s is None or not p.get("time"):
+            continue
+        t = parse_time(p["time"])
+        if s["latest_time"] is None or t > s["latest_time"]:  # keep the newest series
+            s["latest_time"] = t
+            s["latest_value"] = to_float(p.get("value"))
+
+
+def parse_time(text):
+    return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def to_float(v):
+    try:
+        x = float(v)
+        return x if math.isfinite(x) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def is_active(site, now, window_days):
+    """Spec rule: active if the latest discharge reading is within the active window."""
+    t = site.get("latest_time")
+    return t is not None and (now - t).total_seconds() <= window_days * 86400
+
+
+# --------------------------------------------------------------- formatting
+def fmt_flow(q):
+    if q is None:
+        return "No value"
+    return f"{q:,.0f}" if q >= 100 else f"{q:,.3g}"
+
+
+def dot_icon(fill, outline, size=14):
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ImageDraw.Draw(img).ellipse((1, 1, size - 2, size - 2), fill=fill, outline=outline, width=2)
+    return ImageTk.PhotoImage(img)
+
+
+# ======================================================================= app
 class GageExplorerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
         self.geometry("1300x800")
         self.minsize(1000, 650)
+        self.sites = {}          # id -> site dict
+        self.boundary = []       # list of rings of (lat, lon)
+        self.markers = []
+        self.polygons = []
+        self.jobs = queue.Queue()  # results from worker threads
+        self.icons = {
+            "active": dot_icon("#2f73bd", "#12345e"),
+            "hist": dot_icon("#b8bec8", "#6b7280", 11),
+        }
         self._build_menu()
         self._build_controls()
         self._build_status_bar()  # pack before the expanding layout so it is never squeezed out
         self._build_layout()
-        self._show_placeholder()
+        self._clear_info()
+        self.after(100, self._poll_jobs)
+        self.after(200, self.load_live_data)
 
     # ------------------------------------------------------------------ UI
     def _build_menu(self):
@@ -37,6 +159,7 @@ class GageExplorerApp(tk.Tk):
         file_menu.add_command(label="Export Daily Flow...", state="disabled")
         file_menu.add_command(label="Export Gage Table...", state="disabled")
         file_menu.add_separator()
+        file_menu.add_command(label="Reload Live Data", command=self.load_live_data)
         file_menu.add_command(label="Quit", command=self.destroy)
         menubar.add_cascade(label="File", menu=file_menu)
         help_menu = tk.Menu(menubar, tearoff=False)
@@ -51,18 +174,26 @@ class GageExplorerApp(tk.Tk):
         ttk.Label(bar, text="  USGS stream gages, HUC 1601 (UT / ID / WY)",
                   foreground="#555").pack(side="left")
         self.show_hist = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bar, text="Show historical gages",
-                        variable=self.show_hist).pack(side="right", padx=6)
-        self.active_days = tk.IntVar(value=7)
-        ttk.Spinbox(bar, from_=1, to=30, width=4,
-                    textvariable=self.active_days).pack(side="right")
+        ttk.Checkbutton(bar, text="Show historical gages", variable=self.show_hist,
+                        command=self.refresh_gages).pack(side="right", padx=6)
+        self.active_days = tk.StringVar(value="7")
+        spin = ttk.Spinbox(bar, from_=1, to=30, width=4, textvariable=self.active_days,
+                           command=self.refresh_gages)
+        spin.bind("<Return>", lambda e: self.refresh_gages())
+        spin.bind("<FocusOut>", lambda e: self.refresh_gages())
+        spin.pack(side="right")
         ttk.Label(bar, text="Active window (days):").pack(side="right", padx=(12, 4))
+        legend = ttk.Frame(bar)
+        legend.pack(side="right", padx=12)
+        tk.Label(legend, image=self.icons["active"]).pack(side="left")
+        ttk.Label(legend, text="Active  ").pack(side="left")
+        tk.Label(legend, image=self.icons["hist"]).pack(side="left")
+        ttk.Label(legend, text="Historical").pack(side="left")
 
     def _build_layout(self):
         paned = ttk.PanedWindow(self, orient="horizontal")
         paned.pack(side="top", fill="both", expand=True)
 
-        # Left: map
         map_frame = ttk.Frame(paned)
         self.map = tkintermapview.TkinterMapView(map_frame, corner_radius=0)
         self.map.pack(fill="both", expand=True)
@@ -70,20 +201,19 @@ class GageExplorerApp(tk.Tk):
         self.map.set_zoom(8)
         paned.add(map_frame, weight=55)
 
-        # Right: list, info, plot
         right = ttk.Frame(paned, padding=8)
         paned.add(right, weight=45)
 
         list_box = ttk.LabelFrame(right, text="Gages", padding=4)
         list_box.pack(fill="x")
-        cols = ("site", "name", "flow")
-        self.tree = ttk.Treeview(list_box, columns=cols, show="headings", height=6)
-        self.tree.heading("site", text="Site number")
-        self.tree.heading("name", text="Name")
-        self.tree.heading("flow", text="Latest flow (cfs)")
-        self.tree.column("site", width=90, anchor="w")
-        self.tree.column("name", width=290, anchor="w")
-        self.tree.column("flow", width=110, anchor="e")
+        self.tree_cols = {"site": ("Site number", 90, "w"), "name": ("Name", 290, "w"),
+                          "flow": ("Latest flow (cfs)", 110, "e")}
+        self.tree = ttk.Treeview(list_box, columns=list(self.tree_cols), show="headings",
+                                 height=6, selectmode="browse")
+        for c, (label, w, anchor) in self.tree_cols.items():
+            self.tree.heading(c, text=label, command=lambda c=c: self.sort_tree(c))
+            self.tree.column(c, width=w, anchor=anchor)
+        self.sort_state = ("name", False)
         sb = ttk.Scrollbar(list_box, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="x", expand=True)
@@ -120,28 +250,124 @@ class GageExplorerApp(tk.Tk):
         ttk.Label(self, textvariable=self.status_var, relief="sunken",
                   anchor="w", padding=(8, 2)).pack(side="bottom", fill="x")
 
-    # ------------------------------------------------------------ mockup
-    def _show_placeholder(self):
-        """Stage 1 mockup: placeholder values only, no downloads."""
-        self.tree.insert("", "end", values=("10126000", "BEAR RIVER NEAR CORINNE, UT", "1,080"))
-        self.tree.insert("", "end", values=("10092700", "BEAR RIVER AT IDAHO-UTAH STATE LINE", "401"))
-        self.tree.insert("", "end", values=("10011500", "BEAR RIVER NEAR UTAH-WYOMING STATE LINE", "107"))
-        for key, val in {"name": "BEAR RIVER NEAR CORINNE, UT (placeholder)",
-                         "site": "10126000", "state": "Utah", "area": "7,029 mi²",
-                         "flow": "1,080 cfs", "time": "2026-11-24 19:30 MST"}.items():
-            self.info_vars[key].set(val)
-        import math
-        days = list(range(365))
-        q = [800 + 2500 * math.exp(-((d - 200) / 30) ** 2) for d in days]
-        self.ax.plot(days, q, color="#2f73bd", lw=1.2)
-        self.ax.set_xlabel("Day (placeholder)")
-        self.ax.set_ylabel("Daily mean discharge (cfs)")
-        self.ax.set_title("Placeholder hydrograph", fontsize=10)
-        self.ax.grid(alpha=0.3)
-        self.fig.tight_layout()
-        self.canvas.draw()
-        self.stats_var.set("Mean flow: - cfs  |  Peak: - cfs  |  Runoff volume: - acre-ft  (placeholder)")
-        self.status_var.set("Mockup - no data downloaded yet")
+    def _clear_info(self):
+        for v in self.info_vars.values():
+            v.set("-")
+        self.info_vars["name"].set("Click a gage to see its data.")
+        self.ax.clear()
+        self.ax.text(0.5, 0.5, "Click a gage to see its hydrograph", ha="center",
+                     va="center", transform=self.ax.transAxes, color="#777")
+        self.ax.set_xticks([])
+        self.ax.set_yticks([])
+        self.canvas.draw_idle()
+        self.stats_var.set("")
+
+    # ------------------------------------------------------- background work
+    def run_in_background(self, func, on_done, on_error):
+        """Run func() in a worker thread; deliver its result on the Tk main loop."""
+        def worker():
+            try:
+                self.jobs.put((on_done, func()))
+            except Exception as exc:  # noqa: BLE001 - report every failure to the user
+                self.jobs.put((on_error, exc))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _poll_jobs(self):
+        try:
+            while True:
+                callback, value = self.jobs.get_nowait()
+                callback(value)
+        except queue.Empty:
+            pass
+        self.after(100, self._poll_jobs)
+
+    # ------------------------------------------------------------ live data
+    def load_live_data(self):
+        self.status_var.set("Downloading basin boundary, stream sites, and latest readings...")
+
+        def work():
+            boundary = fetch_boundary()
+            sites = fetch_sites()
+            fetch_latest(sites)
+            return boundary, sites
+
+        self.run_in_background(work, self._on_live_data, self._on_live_error)
+
+    def _on_live_data(self, result):
+        self.boundary, self.sites = result
+        self.loaded_at = datetime.now(timezone.utc)
+        self.draw_boundary()
+        self.refresh_gages()
+
+    def _on_live_error(self, exc):
+        self.status_var.set(f"Download failed: {exc}")
+        from tkinter import messagebox
+        messagebox.showerror(APP_TITLE, "Could not download data from USGS.\n\n"
+                             f"{exc}\n\nCheck your internet connection and use "
+                             "File > Reload Live Data.")
+
+    def window_days(self):
+        try:
+            return min(30, max(1, int(float(self.active_days.get()))))
+        except ValueError:
+            return 7
+
+    def draw_boundary(self):
+        for p in self.polygons:
+            p.delete()
+        self.polygons = [self.map.set_polygon(ring, outline_color="#1d3557", fill_color=None,
+                                              border_width=2, name="HUC 1601")
+                         for ring in self.boundary]
+        lats = [lat for ring in self.boundary for lat, _ in ring]
+        lons = [lon for ring in self.boundary for _, lon in ring]
+        if lats:
+            self.map.fit_bounding_box((max(lats), min(lons)), (min(lats), max(lons)))
+
+    def refresh_gages(self):
+        """Classify active/historical, redraw markers, and refill the gage list."""
+        if not self.sites:
+            return
+        w = self.window_days()
+        self.active_days.set(str(w))
+        now = datetime.now(timezone.utc)
+        for s in self.sites.values():
+            s["active"] = is_active(s, now, w)
+        shown = [s for s in self.sites.values() if s["active"] or self.show_hist.get()]
+        for m in self.markers:
+            m.delete()
+        self.markers = []
+        # historical first so active markers are drawn on top
+        for s in sorted(shown, key=lambda s: s["active"]):
+            icon = self.icons["active" if s["active"] else "hist"]
+            self.markers.append(self.map.set_marker(s["lat"], s["lon"], icon=icon, data=s["id"],
+                                                    command=self.on_marker_click))
+        self.tree.delete(*self.tree.get_children())
+        for s in shown:
+            flow = fmt_flow(s["latest_value"]) if s["active"] else "historical"
+            self.tree.insert("", "end", iid=s["id"], values=(s["site"], s["name"], flow))
+        self.sort_tree(self.sort_state[0], keep=True)
+        n_act = sum(s["active"] for s in self.sites.values())
+        self.status_var.set(f"{n_act} active gages (reported within {w} days), "
+                            f"{len(self.sites) - n_act} historical, {len(self.sites)} stream sites "
+                            f"in HUC 1601. Showing {len(shown)}.")
+
+    def sort_tree(self, col, keep=False):
+        prev_col, rev = self.sort_state
+        rev = rev if keep else (not rev if col == prev_col else False)
+        self.sort_state = (col, rev)
+
+        def key(iid):
+            s = self.sites[iid]
+            if col == "flow":
+                return s["latest_value"] if s["active"] and s["latest_value"] is not None else -1.0
+            return s["site"] if col == "site" else s["name"]
+        items = sorted(self.tree.get_children(), key=key, reverse=rev)
+        items.sort(key=lambda iid: not self.sites[iid]["active"])  # stable: active gages stay on top
+        for i, iid in enumerate(items):
+            self.tree.move(iid, "", i)
+
+    def on_marker_click(self, marker):
+        self.status_var.set(f"Selected {self.sites[marker.data]['name']} (details in stage 3)")
 
 
 if __name__ == "__main__":
