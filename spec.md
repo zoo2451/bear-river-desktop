@@ -45,7 +45,7 @@ Responses are paged. The app follows `next` links until every page is read.
 - **Info panel** for the selected gage:
   - name
   - site number
-  - state
+  - county and state (where USGS locates the gage; this can differ from the town in its name)
   - drainage area (mi²)
   - latest flow (cfs)
   - date and time of the latest reading (MT), with its age

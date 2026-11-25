@@ -4,6 +4,7 @@ Run with:  python app.py
 See spec.md for requirements.
 """
 
+import json
 import math
 import os
 import queue
@@ -194,6 +195,57 @@ def write_tables(path, tables):
     return written
 
 
+# ------------------------------------------------------ session (feature 3)
+SESSION_VERSION = 1
+
+
+def session_to_dict(a):
+    """Everything needed to show the app offline, as plain JSON types."""
+    sites = []
+    for s in a.sites.values():
+        d = {k: v for k, v in s.items() if k != "active"}
+        d["latest_time"] = s["latest_time"].isoformat() if s["latest_time"] else None
+        sites.append(d)
+    daily = [{"site_id": sid, "days": days,
+              "date": df["date"].dt.strftime("%Y-%m-%d").tolist(),
+              "flow_cfs": [None if pd.isna(q) else float(q) for q in df["flow_cfs"]]}
+             for (sid, days), df in a.daily_cache.items()]
+    return {"app": APP_TITLE, "version": SESSION_VERSION,
+            "saved_at": a.ref_time().isoformat(),
+            "settings": {"show_hist": bool(a.show_hist.get()), "active_days": a.window_days(),
+                         "period_days": a.period_days, "selected": a.selected},
+            "boundary": [[list(p) for p in ring] for ring in a.boundary],
+            "sites": sites, "daily": daily}
+
+
+def session_from_dict(d):
+    """Inverse of session_to_dict. Raises ValueError/KeyError/TypeError if invalid."""
+    if d.get("app") != APP_TITLE or d.get("version") != SESSION_VERSION:
+        raise ValueError("File was not saved by this version of the app.")
+    sites = {}
+    for s in d["sites"]:
+        s = dict(s)
+        s["latest_time"] = parse_time(s["latest_time"]) if s["latest_time"] else None
+        float(s["lat"]), float(s["lon"])  # must be numbers
+        sites[s["id"]] = s
+    if not sites:
+        raise ValueError("Session contains no sites.")
+    cache = {}
+    for h in d.get("daily", []):
+        df = pd.DataFrame({"date": pd.to_datetime(h["date"]),
+                           "flow_cfs": pd.to_numeric(pd.Series(h["flow_cfs"], dtype="object"),
+                                                     errors="coerce")})
+        cache[(h["site_id"], int(h["days"]))] = df
+    st = d["settings"]
+    period = int(st.get("period_days", 365))
+    return {"saved_at": parse_time(d["saved_at"]),
+            "boundary": [[tuple(p) for p in ring] for ring in d["boundary"]],
+            "sites": sites, "daily_cache": cache, "selected": st.get("selected"),
+            "show_hist": bool(st.get("show_hist", False)),
+            "active_days": int(st.get("active_days", 7)),
+            "period_days": period if period in PERIOD_CHOICES else 365}
+
+
 def parse_time(text):
     return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
 
@@ -258,6 +310,8 @@ class GageExplorerApp(tk.Tk):
         self.selected = None
         self.period_days = 365
         self.daily_cache = {}    # (site id, days) -> DataFrame
+        self.snapshot_time = None  # set when viewing an opened session instead of live data
+        self.data_token = 0        # bumps when the data set changes, to drop stale downloads
         self._build_menu()
         self._build_controls()
         self._build_status_bar()  # pack before the expanding layout so it is never squeezed out
@@ -270,8 +324,8 @@ class GageExplorerApp(tk.Tk):
     def _build_menu(self):
         menubar = tk.Menu(self)
         file_menu = tk.Menu(menubar, tearoff=False)
-        file_menu.add_command(label="Open Session...", state="disabled")
-        file_menu.add_command(label="Save Session...", state="disabled")
+        file_menu.add_command(label="Open Session...", command=self.open_session)
+        file_menu.add_command(label="Save Session...", command=self.save_session)
         file_menu.add_separator()
         file_menu.add_command(label="Export Daily Flow...", command=self.export_daily)
         file_menu.add_command(label="Export Gage Table...", command=self.export_gage_table)
@@ -417,26 +471,88 @@ class GageExplorerApp(tk.Tk):
     # ------------------------------------------------------------ live data
     def load_live_data(self):
         self.status_var.set("Downloading basin boundary, stream sites, and latest readings...")
+        self.data_token += 1
+        token = self.data_token
 
         def work():
             boundary = fetch_boundary()
             sites = fetch_sites()
             fetch_latest(sites)
-            return boundary, sites
+            return token, boundary, sites
 
         self.run_in_background(work, self._on_live_data, self._on_live_error)
 
     def _on_live_data(self, result):
-        self.boundary, self.sites = result
-        self.loaded_at = datetime.now(timezone.utc)
+        token, boundary, sites = result
+        if token != self.data_token:  # a session was opened while this was downloading
+            return
+        self.set_data(boundary, sites, snapshot_time=None)
+
+    def set_data(self, boundary, sites, snapshot_time, daily_cache=None):
+        """Install a new data set. snapshot_time=None means live data."""
+        self.boundary, self.sites = boundary, sites
+        self.snapshot_time = snapshot_time
+        self.daily_cache = daily_cache or {}
+        self.selected = None
+        self._clear_info()
+        self.usgs_btn.configure(state="disabled")
         self.draw_boundary()
         self.refresh_gages()
+
+    def ref_time(self):
+        """'Now' for the active rule and reading ages: the save time for an opened session."""
+        return self.snapshot_time or datetime.now(timezone.utc)
 
     def _on_live_error(self, exc):
         self.status_var.set(f"Download failed: {exc}")
         messagebox.showerror(APP_TITLE, "Could not download data from USGS.\n\n"
                              f"{exc}\n\nCheck your internet connection and use "
-                             "File > Reload Live Data.")
+                             "File > Reload Live Data, or open a saved session with "
+                             "File > Open Session.")
+
+    # ------------------------------------------------- session (feature 3)
+    def save_session(self):
+        if not self.sites:
+            messagebox.showinfo(APP_TITLE, "No data loaded yet.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save session", defaultextension=".json",
+            filetypes=[("Gage Explorer session", "*.json")],
+            initialfile=f"bear_river_session_{self.ref_time().astimezone(MOUNTAIN):%Y-%m-%d}.json")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(session_to_dict(self), fh)
+        except OSError as exc:
+            messagebox.showerror(APP_TITLE, f"Could not save the session:\n{exc}")
+            return
+        self.status_var.set(f"Saved session {os.path.basename(path)} "
+                            f"({len(self.sites)} sites, {len(self.daily_cache)} hydrographs).")
+
+    def open_session(self):
+        path = filedialog.askopenfilename(title="Open session",
+                                          filetypes=[("Gage Explorer session", "*.json")])
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as fh:
+                state = session_from_dict(json.load(fh))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            messagebox.showerror(APP_TITLE, f"Not a valid session file; current data kept.\n\n{exc}")
+            return
+        self.data_token += 1  # ignore any live download still running
+        self.show_hist.set(state["show_hist"])
+        self.active_days.set(str(state["active_days"]))
+        self.period_days = state["period_days"]
+        self.period_var.set(f"{self.period_days} days")
+        self.set_data(state["boundary"], state["sites"], state["saved_at"], state["daily_cache"])
+        if state["selected"] in self.sites:
+            self.select_site(state["selected"])
+        self.status_var.set(
+            f"Opened session saved {state['saved_at'].astimezone(MOUNTAIN):%Y-%m-%d %H:%M %Z} "
+            f"(offline snapshot, {len(state['daily_cache'])} saved hydrographs). "
+            "File > Reload Live Data returns to live data. " + self.status_var.get())
 
     def window_days(self):
         try:
@@ -461,7 +577,7 @@ class GageExplorerApp(tk.Tk):
             return
         w = self.window_days()
         self.active_days.set(str(w))
-        now = datetime.now(timezone.utc)
+        now = self.ref_time()
         for s in self.sites.values():
             s["active"] = is_active(s, now, w)
         shown = [s for s in self.sites.values() if s["active"] or self.show_hist.get()]
@@ -545,7 +661,7 @@ class GageExplorerApp(tk.Tk):
             q = s["latest_value"]
             v["flow"].set(f"{fmt_flow(q)} cfs" if q is not None
                           else "No value (ice/equipment)")
-            age = (datetime.now(timezone.utc) - t).total_seconds()
+            age = (self.ref_time() - t).total_seconds()
             status = "active" if s.get("active") else "historical"
             v["time"].set(f"{t.astimezone(MOUNTAIN):%Y-%m-%d %H:%M %Z}  ({fmt_age(age)}, {status})")
         self.usgs_btn.configure(state="normal")
@@ -570,7 +686,11 @@ class GageExplorerApp(tk.Tk):
         self.status_var.set(f"Downloading {self.period_days} days of daily flow for "
                             f"{self.sites[site_id]['site']}...")
 
+        token = self.data_token
+
         def done(df):
+            if token != self.data_token:  # data set changed while downloading
+                return
             self.daily_cache[key] = df
             self.status_var.set(f"Loaded {len(df)} daily values for {self.sites[site_id]['site']}.")
             if self.selected == site_id:
