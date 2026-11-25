@@ -334,7 +334,11 @@ class GageExplorerApp(tk.Tk):
         file_menu.add_command(label="Quit", command=self.destroy)
         menubar.add_cascade(label="File", menu=file_menu)
         help_menu = tk.Menu(menubar, tearoff=False)
-        help_menu.add_command(label="About", state="disabled")
+        help_menu.add_command(label="About", command=lambda: messagebox.showinfo(
+            APP_TITLE, f"{APP_TITLE}\n\nUSGS stream gages in the Bear River basin (HUC 1601).\n"
+            "Data: USGS Water Data API (api.waterdata.usgs.gov) and the USGS Watershed "
+            "Boundary Dataset. Recent values are provisional and may change.\n\n"
+            "Map tiles: (c) OpenStreetMap contributors.\n\nCCE 270 - see README.md and spec.md."))
         menubar.add_cascade(label="Help", menu=help_menu)
         self.config(menu=menubar)
 

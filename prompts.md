@@ -41,3 +41,7 @@
 - **Asked:** Build feature 3 (save/open session, my own idea) from spec.md.
 - **Changed:** Added File > Save Session and File > Open Session. A `.json` file stores the boundary, all sites with their latest readings, every downloaded hydrograph, and the settings (selected gage, period, active window, historical toggle). An opened session uses its save time as "now", so gages that were active stay active when it is reopened days later. A late live download can no longer overwrite an opened session. Invalid files show an error and keep the current data. The live-download error dialog now points to Open Session. Also removed an accidentally committed `__pycache__` file and added `.gitignore`; noted county in the spec's Outputs.
 - **Result:** Succeeded. Saved a 102 KB session, cut off all network access, and reopened it: the Corinne info panel and statistics were identical to the live values, with 21 markers and the boundary drawn. A bad file showed "Not a valid session file; current data kept."
+
+- **Asked:** Finish up: README, requirements, and the remaining menu item.
+- **Changed:** Added `README.md` (install, run, how to use, validation, data sources), `requirements.txt`, and a working Help > About dialog with data and map-tile credits.
+- **Result:** Succeeded. Still to do by the student: fill in the "My own check in the app" paragraph in spec.md, read and correct this log, and push to GitHub.
