@@ -3,6 +3,7 @@
 Tkinter desktop port of the Bear River Gage Explorer web app (CCE 270, Option A).
 
 - `app.py` - the complete desktop app. Start it with `python app.py`.
+- `index.html` - project web page (GitHub Pages): describes the app and links to the download. The app itself stays in `app.py`.
 - `spec.md` - project requirements and specification. Read it before every build request.
 - `prompts.md` - a log of requests and resulting changes.
 - `README.md` - how to install and run the app.

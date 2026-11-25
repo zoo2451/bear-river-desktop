@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bear River Gage Explorer (Desktop)</title>
+<meta name="description" content="A Tkinter desktop app that maps the USGS stream gages in the Bear River basin and shows each gage's latest flow and daily hydrograph.">
+<style>
+  :root {
+    --bg: #f7f8fa; --card: #ffffff; --text: #1c2430; --muted: #5a6677;
+    --navy: #1f3a5f; --blue: #2b6cb0; --line: #dde3ea; --code: #eef2f6;
+    --pass: #1f7a4d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161c; --card: #1a2029; --text: #e3e8ef; --muted: #9aa6b5;
+      --navy: #9cc0ea; --blue: #6ea8e8; --line: #2c3542; --code: #232b36;
+      --pass: #5cc48f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { color: var(--navy); font-size: 1.9rem; line-height: 1.2; margin: 0 0 8px; }
+  h2 { color: var(--navy); font-size: 1.25rem; margin: 36px 0 10px; }
+  .lead { color: var(--muted); font-size: 1.05rem; margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px 20px; }
+  .note { border-left: 4px solid var(--blue); }
+  a { color: var(--blue); }
+  code, pre { font-family: ui-monospace, Consolas, monospace; background: var(--code); border-radius: 4px; }
+  code { padding: 1px 5px; font-size: 0.92em; }
+  pre { padding: 10px 14px; overflow-x: auto; }
+  pre code { padding: 0; background: none; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 0; }
+  .btn {
+    display: inline-block; padding: 8px 14px; border-radius: 6px; text-decoration: none;
+    border: 1px solid var(--blue); color: var(--blue); font-weight: 600;
+  }
+  .btn.primary { background: var(--blue); color: var(--card); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pass { color: var(--pass); font-weight: 600; }
+  footer { margin-top: 48px; color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bear River Gage Explorer (Desktop)</h1>
+  <p class="lead">A Tkinter desktop app that maps the USGS stream gages in the Bear River basin (HUC 1601, in Utah, Idaho, and Wyoming). Click a gage to see its drainage area, its latest flow, and a daily hydrograph with statistics.</p>
+
+  <div class="card note">
+    This is a Python desktop app, so it runs on your computer, not in the browser. Download it and start it with <code>python app.py</code> (steps below).
+    <div class="buttons">
+      <a class="btn primary" href="app.py" download>Download app.py</a>
+      <a class="btn" href="requirements.txt" download>requirements.txt</a>
+      <a class="btn" href="spec.md">spec.md</a>
+      <a class="btn" href="prompts.md">prompts.md</a>
+      <a class="btn" href="README.md">README.md</a>
+    </div>
+  </div>
+
+  <h2>Install and run</h2>
+  <ol>
+    <li>Install Python 3.10 or newer from <a href="https://www.python.org">python.org</a>. On Windows, check "Add Python to PATH" and keep "tcl/tk" selected.</li>
+    <li>Download <code>app.py</code> and <code>requirements.txt</code> into one folder (or clone this repository).</li>
+    <li>In a terminal in that folder, run:
+      <pre><code>python -m pip install -r requirements.txt
+python app.py</code></pre>
+    </li>
+  </ol>
+  <p>The app needs internet to download live USGS data and map tiles. Without it, use <strong>File &gt; Open Session</strong> to view a session saved earlier.</p>
+
+  <h2>What it does</h2>
+  <ul>
+    <li><strong>Map:</strong> the basin boundary, with active gages (reported in the last 7 days) as blue dots. A checkbox also shows the ~300 historical sites in gray.</li>
+    <li><strong>Gage list:</strong> a sortable table with site number, name, and latest flow (cfs).</li>
+    <li><strong>Info panel:</strong> name, site number, county and state, drainage area (mi²), latest flow (cfs), and the reading time in Mountain Time, with a link to the gage's USGS page.</li>
+    <li><strong>Hydrograph and statistics:</strong> daily mean discharge with the mean flow <em>Q̄</em>, the number of days <em>n</em>, the peak and minimum, and the runoff volume <em>V</em> = 1.98347 × Σ<em>Q</em><sub>i</sub> acre-ft.</li>
+    <li>Downloads run in a background thread, so the window never freezes.</li>
+  </ul>
+
+  <h2>Features added (not in the web version)</h2>
+  <ol>
+    <li><strong>Interactive hydrograph toolbar:</strong> pan, zoom, and save the plot as PNG/PDF; a period dropdown (30, 90, 365, or 730 days) and a log-scale toggle.</li>
+    <li><strong>Export to CSV/Excel:</strong> save the selected gage's daily flow and statistics, or the table of all gages, as <code>.csv</code> or <code>.xlsx</code>.</li>
+    <li><strong>Save/open session:</strong> store all downloaded data in a <code>.json</code> file and reopen it later without internet, for field use or a dated snapshot for a report.</li>
+  </ol>
+
+  <h2>Validation</h2>
+  <p>Checked on 2026-11-24 with <code>python validation/run_validation.py</code> against separate USGS requests and an Excel <code>=AVERAGE()</code>. See <a href="spec.md">spec.md</a> for the full table.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Check</th><th>Expected</th><th>App</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>10126000 drainage area (mi²)</td><td class="num">7,029</td><td class="num">7,029</td><td class="pass">PASS</td></tr>
+        <tr><td>10126000 latest flow (cfs), 20:30 MST</td><td class="num">1,080</td><td class="num">1,080</td><td class="pass">PASS</td></tr>
+        <tr><td>10092700 drainage area (mi²)</td><td class="num">4,884</td><td class="num">4,884</td><td class="pass">PASS</td></tr>
+        <tr><td>10011500 drainage area (mi²)</td><td class="num">172</td><td class="num">172</td><td class="pass">PASS</td></tr>
+        <tr><td>10126000 mean flow <em>Q̄</em> (cfs), 364 days (Excel)</td><td class="num">796.28</td><td class="num">796.28</td><td class="pass">PASS</td></tr>
+        <tr><td>Drainage area increases downstream</td><td>increasing</td><td class="num">172 → 7,029</td><td class="pass">PASS</td></tr>
+        <tr><td>Runoff volume = 1.98347 × <em>n</em> × <em>Q̄</em> (acre-ft)</td><td class="num">574,899</td><td class="num">574,899</td><td class="pass">PASS</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Data</h2>
+  <p>All data comes from the <a href="https://api.waterdata.usgs.gov/">USGS Water Data API</a> and the USGS Watershed Boundary Dataset. Map tiles are from OpenStreetMap. Values USGS marks "Provisional" may change.</p>
+
+  <footer>CCE 270 · Option A desktop port of the Bear River Gage Explorer web app.</footer>
+</main>
+</body>
+</html>

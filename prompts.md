@@ -53,3 +53,7 @@
 - **Asked:** Put the original template back and write the numbers underneath it instead.
 - **Changed:** Restored the "My own check in the app" template (keeping the date) and added a line under it with the values from the check above.
 - **Result:** Done. The template's blanks are still for the student to fill in.
+
+- **Asked:** Add an index.html at the top level (the assignment asks for one and a GitHub Pages address), then commit.
+- **Changed:** Added `index.html`, a project page for the desktop app, since Tkinter cannot run in a browser. It covers what the app does, install and run steps, the three added features, the validation results, and links to `app.py`, `requirements.txt`, `spec.md`, `prompts.md`, and `README.md`. It is one file with no external scripts and works in light and dark mode and on phones. Listed it in AGENTS.md. Committed the earlier spec/prompts edits first, then the page.
+- **Result:** Succeeded. The page's links use relative paths, so they work once the repository is published with GitHub Pages.
