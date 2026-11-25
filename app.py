@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 from tkinter import ttk
 from zoneinfo import ZoneInfo
 
+import webbrowser
+
+import matplotlib.dates as mdates
+import pandas as pd
 import requests
 import tkintermapview
 from PIL import Image, ImageDraw, ImageTk
@@ -94,6 +98,47 @@ def fetch_latest(sites):
             s["latest_value"] = to_float(p.get("value"))
 
 
+def fetch_daily(site_id, days):
+    """Daily mean discharge (00060, statistic 00003) for the last `days` days.
+
+    Returns a DataFrame with columns date (datetime64) and flow_cfs (float, NaN if missing).
+    """
+    feats = fetch_features(f"{OGC}/daily/items", {
+        "f": "json", "limit": 1000, "monitoring_location_id": site_id,
+        "parameter_code": "00060", "statistic_id": "00003",
+        "time": f"P{int(days)}D", "skipGeometry": "true"})
+    rows = {}
+    for f in feats:
+        p = f["properties"]
+        if p.get("time"):
+            # one value per day; if several time series exist keep the first non-missing
+            q = to_float(p.get("value"))
+            if rows.get(p["time"]) is None:
+                rows[p["time"]] = q
+    df = pd.DataFrame({"date": pd.to_datetime(list(rows.keys())),
+                       "flow_cfs": pd.to_numeric(list(rows.values()), errors="coerce")})
+    return df.sort_values("date").reset_index(drop=True)
+
+
+CFS_DAY_TO_ACRE_FT = 86400 / 43560  # 1.98347 acre-ft per cfs-day
+
+
+def flow_stats(df):
+    """Spec equations: mean flow, n, peak, minimum, and runoff volume (acre-ft)."""
+    q = df["flow_cfs"].dropna()
+    if q.empty:
+        return None
+    d = df.loc[q.index, "date"]
+    return {
+        "n": int(q.size),
+        "mean": float(q.sum() / q.size),
+        "peak": float(q.max()), "peak_date": d[q.idxmax()],
+        "min": float(q.min()), "min_date": d[q.idxmin()],
+        "volume_af": float(q.sum() * CFS_DAY_TO_ACRE_FT),
+        "start": df["date"].iloc[0], "end": df["date"].iloc[-1],
+    }
+
+
 def parse_time(text):
     return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
 
@@ -119,6 +164,18 @@ def fmt_flow(q):
     return f"{q:,.0f}" if q >= 100 else f"{q:,.3g}"
 
 
+def fmt_age(seconds):
+    hours = seconds / 3600
+    if hours < 48:
+        return f"{hours:.1f} hours ago"
+    days = hours / 24
+    return f"{days:.0f} days ago" if days < 730 else f"{days / 365.25:.0f} years ago"
+
+
+def usgs_page(site_number):
+    return f"https://waterdata.usgs.gov/monitoring-location/USGS-{site_number}/"
+
+
 def dot_icon(fill, outline, size=14):
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     ImageDraw.Draw(img).ellipse((1, 1, size - 2, size - 2), fill=fill, outline=outline, width=2)
@@ -140,7 +197,12 @@ class GageExplorerApp(tk.Tk):
         self.icons = {
             "active": dot_icon("#2f73bd", "#12345e"),
             "hist": dot_icon("#b8bec8", "#6b7280", 11),
+            "selected": dot_icon("#f08a24", "#7a3d00", 18),
         }
+        self.marker_by_id = {}
+        self.selected = None
+        self.period_days = 365
+        self.daily_cache = {}    # (site id, days) -> DataFrame
         self._build_menu()
         self._build_controls()
         self._build_status_bar()  # pack before the expanding layout so it is never squeezed out
@@ -218,6 +280,7 @@ class GageExplorerApp(tk.Tk):
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="x", expand=True)
         sb.pack(side="right", fill="y")
+        self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
         info = ttk.LabelFrame(right, text="Selected gage", padding=6)
         info.pack(fill="x", pady=(8, 0))
@@ -231,7 +294,8 @@ class GageExplorerApp(tk.Tk):
             var = tk.StringVar(value="-")
             ttk.Label(info, textvariable=var).grid(row=r, column=1, sticky="w")
             self.info_vars[key] = var
-        self.usgs_btn = ttk.Button(info, text="Open USGS page", state="disabled")
+        self.usgs_btn = ttk.Button(info, text="Open USGS page", state="disabled",
+                                   command=self.open_usgs_page)
         self.usgs_btn.grid(row=0, column=2, rowspan=2, sticky="ne", padx=(16, 0))
         info.columnconfigure(1, weight=1)
 
@@ -336,16 +400,21 @@ class GageExplorerApp(tk.Tk):
         for m in self.markers:
             m.delete()
         self.markers = []
-        # historical first so active markers are drawn on top
-        for s in sorted(shown, key=lambda s: s["active"]):
-            icon = self.icons["active" if s["active"] else "hist"]
-            self.markers.append(self.map.set_marker(s["lat"], s["lon"], icon=icon, data=s["id"],
-                                                    command=self.on_marker_click))
+        self.marker_by_id = {}
+        # historical first so active markers are drawn on top; selected last
+        for s in sorted(shown, key=lambda s: (s["id"] == self.selected, s["active"])):
+            m = self.map.set_marker(s["lat"], s["lon"], icon=self.icon_for(s), data=s["id"],
+                                    command=self.on_marker_click)
+            self.markers.append(m)
+            self.marker_by_id[s["id"]] = m
         self.tree.delete(*self.tree.get_children())
         for s in shown:
             flow = fmt_flow(s["latest_value"]) if s["active"] else "historical"
             self.tree.insert("", "end", iid=s["id"], values=(s["site"], s["name"], flow))
         self.sort_tree(self.sort_state[0], keep=True)
+        if self.selected in self.marker_by_id:
+            self.tree.selection_set(self.selected)
+            self.tree.see(self.selected)
         n_act = sum(s["active"] for s in self.sites.values())
         self.status_var.set(f"{n_act} active gages (reported within {w} days), "
                             f"{len(self.sites) - n_act} historical, {len(self.sites)} stream sites "
@@ -366,8 +435,124 @@ class GageExplorerApp(tk.Tk):
         for i, iid in enumerate(items):
             self.tree.move(iid, "", i)
 
+    # ------------------------------------------------------------ selection
+    def icon_for(self, s):
+        if s["id"] == self.selected:
+            return self.icons["selected"]
+        return self.icons["active" if s.get("active") else "hist"]
+
     def on_marker_click(self, marker):
-        self.status_var.set(f"Selected {self.sites[marker.data]['name']} (details in stage 3)")
+        self.select_site(marker.data)
+
+    def on_tree_select(self, _event=None):
+        sel = self.tree.selection()
+        if sel and sel[0] != self.selected:
+            self.select_site(sel[0])
+
+    def select_site(self, site_id):
+        old, self.selected = self.selected, site_id
+        for sid in (old, site_id):
+            if sid in self.marker_by_id:
+                self.marker_by_id[sid].change_icon(self.icon_for(self.sites[sid]))
+        if site_id in self.marker_by_id:  # keep the highlighted marker on top
+            self.map.canvas.tag_raise(self.marker_by_id[site_id].canvas_icon)
+        if self.tree.exists(site_id) and self.tree.selection() != (site_id,):
+            self.tree.selection_set(site_id)
+            self.tree.see(site_id)
+        self.show_info(self.sites[site_id])
+        self.load_hydrograph(site_id)
+
+    def show_info(self, s):
+        v = self.info_vars
+        v["name"].set(s["name"])
+        v["site"].set(s["site"])
+        v["state"].set(s["state"] or "-")
+        da = s["drainage_area"]
+        v["area"].set(f"{da:,.1f} mi²" if da is not None else "not reported")
+        t = s["latest_time"]
+        if t is None:
+            v["flow"].set("No discharge reading on record")
+            v["time"].set("-")
+        else:
+            q = s["latest_value"]
+            v["flow"].set(f"{fmt_flow(q)} cfs" if q is not None
+                          else "No value (ice/equipment)")
+            age = (datetime.now(timezone.utc) - t).total_seconds()
+            status = "active" if s.get("active") else "historical"
+            v["time"].set(f"{t.astimezone(MOUNTAIN):%Y-%m-%d %H:%M %Z}  ({fmt_age(age)}, {status})")
+        self.usgs_btn.configure(state="normal")
+
+    def open_usgs_page(self):
+        if self.selected:
+            webbrowser.open(usgs_page(self.sites[self.selected]["site"]))
+
+    # ----------------------------------------------------------- hydrograph
+    def load_hydrograph(self, site_id):
+        key = (site_id, self.period_days)
+        if key in self.daily_cache:
+            self.draw_hydrograph(site_id)
+            return
+        self.ax.clear()
+        self.ax.text(0.5, 0.5, "Downloading daily flow...", ha="center", va="center",
+                     transform=self.ax.transAxes, color="#777")
+        self.ax.set_xticks([])
+        self.ax.set_yticks([])
+        self.canvas.draw_idle()
+        self.stats_var.set("")
+        self.status_var.set(f"Downloading {self.period_days} days of daily flow for "
+                            f"{self.sites[site_id]['site']}...")
+
+        def done(df):
+            self.daily_cache[key] = df
+            self.status_var.set(f"Loaded {len(df)} daily values for {self.sites[site_id]['site']}.")
+            if self.selected == site_id:
+                self.draw_hydrograph(site_id)
+
+        def failed(exc):
+            self.status_var.set(f"Daily flow download failed: {exc}")
+            if self.selected == site_id:
+                self.plot_message("Could not download daily flow.\nCheck your connection.")
+
+        self.run_in_background(lambda: fetch_daily(site_id, self.period_days), done, failed)
+
+    def plot_message(self, text):
+        self.ax.clear()
+        self.ax.text(0.5, 0.5, text, ha="center", va="center",
+                     transform=self.ax.transAxes, color="#777")
+        self.ax.set_xticks([])
+        self.ax.set_yticks([])
+        self.canvas.draw_idle()
+        self.stats_var.set("Mean flow: -  |  Peak: -  |  Minimum: -  |  Runoff volume: -")
+
+    def draw_hydrograph(self, site_id):
+        s = self.sites[site_id]
+        df = self.daily_cache.get((site_id, self.period_days))
+        stats = flow_stats(df) if df is not None else None
+        if stats is None:
+            self.plot_message(f"No daily data for the last {self.period_days} days.")
+            return
+        ax = self.ax
+        ax.clear()
+        ax.plot(df["date"], df["flow_cfs"], color="#2f73bd", lw=1.3, label="Daily mean flow")
+        ax.axhline(stats["mean"], color="#1d3557", ls="--", lw=1,
+                   label=f"Mean = {stats['mean']:,.1f} cfs")
+        ax.plot(stats["peak_date"], stats["peak"], "o", color="#f08a24",
+                label=f"Peak = {stats['peak']:,.0f} cfs")
+        ax.set_ylabel("Daily mean discharge (cfs)")
+        ax.set_xlabel("Date")
+        ax.set_title(f"{s['site']}  {s['name']}", fontsize=9)
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8, loc="best", framealpha=0.85)
+        ax.margins(y=0.12)
+        self.fig.tight_layout()
+        self.canvas.draw_idle()
+        self.stats_var.set(
+            f"{stats['start']:%Y-%m-%d} to {stats['end']:%Y-%m-%d}:  "
+            f"Mean flow {stats['mean']:,.1f} cfs (n = {stats['n']} days)  |  "
+            f"Peak {stats['peak']:,.0f} cfs on {stats['peak_date']:%Y-%m-%d}  |  "
+            f"Minimum {stats['min']:,.1f} cfs on {stats['min_date']:%Y-%m-%d}  |  "
+            f"Runoff volume {stats['volume_af']:,.0f} acre-ft")
 
 
 if __name__ == "__main__":
