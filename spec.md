@@ -87,7 +87,29 @@ Responses are paged. The app follows `next` links until every page is read.
    - **(b)** proportionality: runoff volume equals 1.98347 × *n* × *Q̄* to within rounding.
 
 ## Validation results
-To be filled in after the validated build.
+The agent ran these checks with `python validation/run_validation.py` on 2026-11-24 at 20:54 MST.
+
+**Where the expected values come from:**
+- **Case 1:** each gage was requested on its own from the USGS Water Data API, the source behind the waterdata.usgs.gov gage pages, without using the app's code.
+- **Case 2:** a year of daily values was downloaded as CSV (`validation/10126000_daily.csv`) and averaged outside the app. The same data is in `validation/10126000_daily.xlsx`, with Excel `=AVERAGE()`, `=COUNT()`, and `=SUM()*86400/43560` formulas.
+- **Case 3:** property checks on the app's own values.
+
+| Case | Quantity | Expected | App (actual) | Result |
+|---|---|---|---|---|
+| 1 | 10126000 drainage area (mi²) | 7,029 | 7,029 | PASS |
+| 1 | 10126000 latest flow (cfs) at 2026-11-24 20:30 MST | 1,080 | 1,080 | PASS |
+| 1 | 10092700 drainage area (mi²) | 4,884 | 4,884 | PASS |
+| 1 | 10092700 latest flow (cfs) at 2026-11-24 19:45 MST | 401 | 401 | PASS |
+| 1 | 10011500 drainage area (mi²) | 172 | 172 | PASS |
+| 1 | 10011500 latest flow (cfs) at 2026-11-24 20:30 MST | 107 | 107 | PASS |
+| 2 | 10126000 days with values, 2025-11-25 to 2026-11-23 | 364 | 364 | PASS |
+| 2 | 10126000 mean flow *Q̄* (cfs) | 796.28 | 796.28 | PASS |
+| 3a | Main-stem drainage area, upstream → downstream (mi²) | strictly increasing | 172 → 755 → 2,480 → 3,705 → 4,884 → 7,029 | PASS |
+| 3b | 10126000 runoff volume = 1.98347 × *n* × *Q̄* (acre-ft) | 574,899 | 574,899 | PASS |
+
+**Hand check (case 2):** *V* = 1.98347 × 364 days × 796.28 cfs = 574,899 acre-ft, which matches the app.
+
+**My own check in the app:** _(fill in)_ I opened the app, clicked 10126000 Bear River near Corinne, and compared it with https://waterdata.usgs.gov/monitoring-location/USGS-10126000/ on ____: drainage area ____ mi² vs. app ____ mi²; latest flow ____ cfs vs. app ____ cfs. I also opened `10126000_daily.xlsx` in Excel: `=AVERAGE` gave ____ cfs vs. the app's ____ cfs.
 
 ## Out of scope
 - The old waterservices.usgs.gov service.

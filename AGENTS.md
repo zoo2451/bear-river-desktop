@@ -7,6 +7,7 @@ Tkinter desktop port of the Bear River Gage Explorer web app (CCE 270, Option A)
 - `prompts.md` - a log of requests and resulting changes.
 - `README.md` - how to install and run the app.
 - `requirements.txt` - Python packages.
+- `validation/` - validation script, downloaded reference data, Excel check, and results.
 
 Keep the app in `app.py`. Do not use the old waterservices.usgs.gov service; use the USGS Water Data API (api.waterdata.usgs.gov).
 
