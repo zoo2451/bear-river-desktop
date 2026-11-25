@@ -20,12 +20,13 @@ import requests
 import tkintermapview
 from PIL import Image, ImageDraw, ImageTk
 from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
 APP_TITLE = "Bear River Gage Explorer"
 BASIN_CENTER = (41.8, -111.6)  # lat, lon
 MOUNTAIN = ZoneInfo("America/Denver")
 TIMEOUT_S = 30
+PERIOD_CHOICES = (30, 90, 365, 730)  # hydrograph period options (days)
 
 # ---------------------------------------------------------------- data sources
 OGC = "https://api.waterdata.usgs.gov/ogcapi/v0/collections"
@@ -304,9 +305,23 @@ class GageExplorerApp(tk.Tk):
         self.stats_var = tk.StringVar(value="")
         ttk.Label(plot_box, textvariable=self.stats_var, foreground="#333",
                   wraplength=560, justify="left").pack(side="bottom", fill="x", pady=(4, 0))
+        # Feature 1: plot controls + matplotlib navigation toolbar
+        ctrl = ttk.Frame(plot_box)
+        ctrl.pack(side="top", fill="x", pady=(0, 4))
+        ttk.Label(ctrl, text="Period:").pack(side="left")
+        self.period_var = tk.StringVar(value="365 days")
+        period = ttk.Combobox(ctrl, textvariable=self.period_var, width=10, state="readonly",
+                              values=[f"{d} days" for d in PERIOD_CHOICES])
+        period.pack(side="left", padx=(4, 14))
+        period.bind("<<ComboboxSelected>>", self.on_period_change)
+        self.log_scale = tk.BooleanVar(value=False)
+        ttk.Checkbutton(ctrl, text="Log-scale flow axis", variable=self.log_scale,
+                        command=self.redraw_selected).pack(side="left")
         self.fig = Figure(figsize=(5, 3), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_box)
+        self.toolbar = NavigationToolbar2Tk(self.canvas, plot_box, pack_toolbar=False)
+        self.toolbar.pack(side="bottom", fill="x")
         self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
 
     def _build_status_bar(self):
@@ -515,6 +530,15 @@ class GageExplorerApp(tk.Tk):
 
         self.run_in_background(lambda: fetch_daily(site_id, self.period_days), done, failed)
 
+    def on_period_change(self, _event=None):
+        self.period_days = int(self.period_var.get().split()[0])
+        if self.selected:
+            self.load_hydrograph(self.selected)
+
+    def redraw_selected(self):
+        if self.selected and (self.selected, self.period_days) in self.daily_cache:
+            self.draw_hydrograph(self.selected)
+
     def plot_message(self, text):
         self.ax.clear()
         self.ax.text(0.5, 0.5, text, ha="center", va="center",
@@ -543,10 +567,13 @@ class GageExplorerApp(tk.Tk):
         ax.set_title(f"{s['site']}  {s['name']}", fontsize=9)
         ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
         ax.grid(alpha=0.3)
+        if self.log_scale.get():
+            ax.set_yscale("log", nonpositive="mask")  # zero-flow days cannot be shown on a log axis
         ax.legend(fontsize=8, loc="best", framealpha=0.85)
         ax.margins(y=0.12)
         self.fig.tight_layout()
         self.canvas.draw_idle()
+        self.toolbar.update()  # reset the toolbar's Home view to this plot
         self.stats_var.set(
             f"{stats['start']:%Y-%m-%d} to {stats['end']:%Y-%m-%d}:  "
             f"Mean flow {stats['mean']:,.1f} cfs (n = {stats['n']} days)  |  "

@@ -29,3 +29,7 @@
 - **Asked:** Stage 4: run the validation cases in spec.md and fill in the Validation results.
 - **Changed:** Added `validation/run_validation.py`. It requests the reference values independently of the app (each gage by ID, and daily values as CSV), saves `10126000_daily.csv` and `10126000_daily.xlsx` (with `=AVERAGE`, `=COUNT`, and volume formulas for an Excel check), runs property checks 3a and 3b, and writes `validation_results.md`. Filled the Validation results table into `spec.md`, leaving a blank paragraph for the student's own in-app check.
 - **Result:** Succeeded. 10/10 checks passed: drainage areas and latest flows match for 10126000, 10092700, and 10011500; the Corinne mean is 796.28 cfs in both (n = 364); main-stem drainage area rises 172 → 7,029 mi²; runoff volume = 1.98347 × n × Q̄. The waterdata.usgs.gov page draws its values with JavaScript, so a script can't read it; the student must compare one gage by eye.
+
+- **Asked:** Build feature 1 (interactive hydrograph toolbar) from the Features section of spec.md.
+- **Changed:** Added the matplotlib `NavigationToolbar2Tk` under the hydrograph (pan, zoom, home, save as PNG/PDF), a period dropdown (30/90/365/730 days) that downloads and caches that period, and a log-scale checkbox that redraws without downloading again (zero-flow days are hidden on the log axis). The toolbar's Home view resets on each new plot.
+- **Result:** Succeeded. Corinne over 730 days: 729 values, mean 849.6 cfs; the log axis shows the summer low flows clearly.
