@@ -57,3 +57,7 @@
 - **Asked:** Add an index.html at the top level (the assignment asks for one and a GitHub Pages address), then commit.
 - **Changed:** Added `index.html`, a project page for the desktop app, since Tkinter cannot run in a browser. It covers what the app does, install and run steps, the three added features, the validation results, and links to `app.py`, `requirements.txt`, `spec.md`, `prompts.md`, and `README.md`. It is one file with no external scripts and works in light and dark mode and on phones. Listed it in AGENTS.md. Committed the earlier spec/prompts edits first, then the page.
 - **Result:** Succeeded. The page's links use relative paths, so they work once the repository is published with GitHub Pages.
+
+- **Asked:** Put the project on GitHub (the student created the empty public repository zoo2451/bear-river-desktop).
+- **Changed:** Added the `origin` remote and pushed `main` with the full commit history. The agent could not create the repository or turn on GitHub Pages itself, so the student did those on github.com.
+- **Result:** Succeeded. GitHub's `main` matches the local branch.
