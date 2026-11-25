@@ -109,7 +109,7 @@ The agent ran these checks with `python validation/run_validation.py` on 2026-11
 
 **Hand check (case 2):** *V* = 1.98347 × 364 days × 796.28 cfs = 574,899 acre-ft, which matches the app.
 
-**My own check in the app:** _(fill in)_ I opened the app, clicked 10126000 Bear River near Corinne, and compared it with https://waterdata.usgs.gov/monitoring-location/USGS-10126000/ on ____: drainage area ____ mi² vs. app ____ mi²; latest flow ____ cfs vs. app ____ cfs. I also opened `10126000_daily.xlsx` in Excel: `=AVERAGE` gave ____ cfs vs. the app's ____ cfs.
+**My own check in the app:** _(fill in)_ I opened the app, clicked 10126000 Bear River near Corinne, and compared it with https://waterdata.usgs.gov/monitoring-location/USGS-10126000/ on Nov 24, 2026: drainage area 7029 mi² vs. app 7029 mi²; latest flow 1080 cfs vs. app 1080 cfs. I also opened `10126000_daily.xlsx` in Excel: `=AVERAGE` gave 796.28 cfs vs. the app's 796.28 cfs.
 
 ## Out of scope
 - The old waterservices.usgs.gov service.

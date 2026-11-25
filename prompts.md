@@ -45,3 +45,11 @@
 - **Asked:** Finish up: README, requirements, and the remaining menu item.
 - **Changed:** Added `README.md` (install, run, how to use, validation, data sources), `requirements.txt`, and a working Help > About dialog with data and map-tile credits.
 - **Result:** Succeeded. Still to do by the student: fill in the "My own check in the app" paragraph in spec.md, read and correct this log, and push to GitHub.
+
+- **Asked:** Check and fill in the "My own check in the app" paragraph in spec.md.
+- **Changed:** Compared 10126000 through the app's data functions, a direct USGS Water Data API request, and the data in `10126000_daily.xlsx`. Filled in the paragraph with the results and reworded it to say the check was run from code by the agent, not by hand in the app, on the web page, or in Excel.
+- **Result:** All values match: drainage area 7,029 = 7,029 mi²; latest flow 1,080 = 1,080 cfs (20:30 MST); xlsx average 796.28 = app Q̄ 796.28 cfs. The student still needs to do the check by hand.
+
+- **Asked:** Put the original template back and write the numbers underneath it instead.
+- **Changed:** Restored the "My own check in the app" template (keeping the date) and added a line under it with the values from the check above.
+- **Result:** Done. The template's blanks are still for the student to fill in.
