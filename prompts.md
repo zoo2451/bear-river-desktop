@@ -33,3 +33,7 @@
 - **Asked:** Build feature 1 (interactive hydrograph toolbar) from the Features section of spec.md.
 - **Changed:** Added the matplotlib `NavigationToolbar2Tk` under the hydrograph (pan, zoom, home, save as PNG/PDF), a period dropdown (30/90/365/730 days) that downloads and caches that period, and a log-scale checkbox that redraws without downloading again (zero-flow days are hidden on the log axis). The toolbar's Home view resets on each new plot.
 - **Result:** Succeeded. Corinne over 730 days: 729 values, mean 849.6 cfs; the log axis shows the summer low flows clearly.
+
+- **Asked:** Build feature 2 (export to CSV/Excel) from spec.md.
+- **Changed:** Added File > Export Daily Flow (selected gage and period: a "Daily flow" sheet with date and cfs, plus a "Summary" sheet with statistics and units) and File > Export Gage Table (all 313 sites: site, name, county, state, lat/lon, drainage area, latest flow, reading time in MT, status, USGS link). `.xlsx` gets one sheet per table; `.csv` writes the daily table plus a `_summary.csv` file. An error dialog appears if the file is open in Excel. Testing raised a question: the State column showed Wyoming for a "Woodruff, UT" gage. Checked: USGS places that gage in Uinta County, WY (the name refers to a nearby town), so the data is right. Added the county to the info panel and table to make that clear.
+- **Result:** Succeeded. The exported Corinne mean is 796.28 cfs in both xlsx and csv, matching validation; the gage table has 313 rows (21 active, 292 historical).

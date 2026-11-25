@@ -5,11 +5,12 @@ See spec.md for requirements.
 """
 
 import math
+import os
 import queue
 import threading
 import tkinter as tk
 from datetime import datetime, timezone
-from tkinter import ttk
+from tkinter import filedialog, messagebox, ttk
 from zoneinfo import ZoneInfo
 
 import webbrowser
@@ -76,6 +77,7 @@ def fetch_sites():
             "site": p.get("monitoring_location_number") or f["id"].split("-", 1)[-1],
             "name": p.get("monitoring_location_name") or "",
             "state": STATE_NAMES.get(p.get("state_code"), p.get("state_name") or ""),
+            "county": p.get("county_name") or "",
             "drainage_area": p.get("drainage_area"),
             "lat": lat, "lon": lon,
             "latest_value": None, "latest_time": None,
@@ -138,6 +140,58 @@ def flow_stats(df):
         "volume_af": float(q.sum() * CFS_DAY_TO_ACRE_FT),
         "start": df["date"].iloc[0], "end": df["date"].iloc[-1],
     }
+
+
+# ------------------------------------------------------- export (feature 2)
+def daily_export_tables(site, df, days):
+    """Daily flow table and a one-row-per-statistic summary for one gage."""
+    daily = pd.DataFrame({"date": df["date"].dt.date, "flow_cfs": df["flow_cfs"]})
+    st = flow_stats(df)
+    rows = [("Site number", site["site"], ""), ("Name", site["name"], ""),
+            ("Drainage area", site["drainage_area"], "mi²"), ("Period requested", days, "days")]
+    if st:
+        rows += [("Start date", f"{st['start']:%Y-%m-%d}", ""), ("End date", f"{st['end']:%Y-%m-%d}", ""),
+                 ("Days with values (n)", st["n"], "days"), ("Mean flow", round(st["mean"], 3), "cfs"),
+                 ("Peak flow", st["peak"], "cfs"), ("Peak date", f"{st['peak_date']:%Y-%m-%d}", ""),
+                 ("Minimum flow", st["min"], "cfs"), ("Minimum date", f"{st['min_date']:%Y-%m-%d}", ""),
+                 ("Runoff volume", round(st["volume_af"], 1), "acre-ft")]
+    rows.append(("Source", "USGS Water Data API, daily mean discharge (00060, 00003)", ""))
+    return daily, pd.DataFrame(rows, columns=["statistic", "value", "unit"])
+
+
+def gage_table(sites):
+    """Table of every stream site with its latest reading and status."""
+    rows = []
+    for s in sites.values():
+        t = s.get("latest_time")
+        rows.append({
+            "site_number": s["site"], "name": s["name"], "county": s.get("county", ""), "state": s["state"],
+            "latitude": s["lat"], "longitude": s["lon"],
+            "drainage_area_mi2": s["drainage_area"],
+            "latest_flow_cfs": s["latest_value"],
+            "latest_reading_MT": t.astimezone(MOUNTAIN).strftime("%Y-%m-%d %H:%M") if t else None,
+            "status": "active" if s.get("active") else "historical",
+            "usgs_page": usgs_page(s["site"]),
+        })
+    df = pd.DataFrame(rows)
+    return df.sort_values(["status", "name"]).reset_index(drop=True) if not df.empty else df
+
+
+def write_tables(path, tables):
+    """Write {sheet name: DataFrame}. .xlsx gets one sheet each; .csv gets the first table
+    in `path` and any others in `<path stem>_<sheet>.csv`. Returns the files written."""
+    root, ext = os.path.splitext(path)
+    if ext.lower() == ".xlsx":
+        with pd.ExcelWriter(path, engine="openpyxl") as xw:
+            for name, df in tables.items():
+                df.to_excel(xw, sheet_name=name[:31], index=False)
+        return [path]
+    written = []
+    for i, (name, df) in enumerate(tables.items()):
+        p = path if i == 0 else f"{root}_{name.lower().replace(' ', '_')}.csv"
+        df.to_csv(p, index=False, encoding="utf-8-sig")  # BOM so Excel shows mi² correctly
+        written.append(p)
+    return written
 
 
 def parse_time(text):
@@ -219,8 +273,8 @@ class GageExplorerApp(tk.Tk):
         file_menu.add_command(label="Open Session...", state="disabled")
         file_menu.add_command(label="Save Session...", state="disabled")
         file_menu.add_separator()
-        file_menu.add_command(label="Export Daily Flow...", state="disabled")
-        file_menu.add_command(label="Export Gage Table...", state="disabled")
+        file_menu.add_command(label="Export Daily Flow...", command=self.export_daily)
+        file_menu.add_command(label="Export Gage Table...", command=self.export_gage_table)
         file_menu.add_separator()
         file_menu.add_command(label="Reload Live Data", command=self.load_live_data)
         file_menu.add_command(label="Quit", command=self.destroy)
@@ -286,7 +340,7 @@ class GageExplorerApp(tk.Tk):
         info = ttk.LabelFrame(right, text="Selected gage", padding=6)
         info.pack(fill="x", pady=(8, 0))
         self.info_vars = {}
-        fields = [("name", "Name"), ("site", "Site number"), ("state", "State"),
+        fields = [("name", "Name"), ("site", "Site number"), ("state", "County, state"),
                   ("area", "Drainage area"), ("flow", "Latest flow"),
                   ("time", "Latest reading")]
         for r, (key, label) in enumerate(fields):
@@ -380,7 +434,6 @@ class GageExplorerApp(tk.Tk):
 
     def _on_live_error(self, exc):
         self.status_var.set(f"Download failed: {exc}")
-        from tkinter import messagebox
         messagebox.showerror(APP_TITLE, "Could not download data from USGS.\n\n"
                              f"{exc}\n\nCheck your internet connection and use "
                              "File > Reload Live Data.")
@@ -481,7 +534,7 @@ class GageExplorerApp(tk.Tk):
         v = self.info_vars
         v["name"].set(s["name"])
         v["site"].set(s["site"])
-        v["state"].set(s["state"] or "-")
+        v["state"].set(", ".join(x for x in (s.get("county"), s["state"]) if x) or "-")
         da = s["drainage_area"]
         v["area"].set(f"{da:,.1f} mi²" if da is not None else "not reported")
         t = s["latest_time"]
@@ -529,6 +582,40 @@ class GageExplorerApp(tk.Tk):
                 self.plot_message("Could not download daily flow.\nCheck your connection.")
 
         self.run_in_background(lambda: fetch_daily(site_id, self.period_days), done, failed)
+
+    # ------------------------------------------------------- export (feature 2)
+    EXPORT_TYPES = [("Excel workbook", "*.xlsx"), ("CSV file", "*.csv")]
+
+    def export_daily(self):
+        df = self.daily_cache.get((self.selected, self.period_days)) if self.selected else None
+        if df is None or df.empty:
+            messagebox.showinfo(APP_TITLE, "Select a gage with daily data first.")
+            return
+        s = self.sites[self.selected]
+        path = filedialog.asksaveasfilename(
+            title="Export daily flow", defaultextension=".xlsx", filetypes=self.EXPORT_TYPES,
+            initialfile=f"{s['site']}_daily_flow_{self.period_days}d.xlsx")
+        if path:
+            daily, summary = daily_export_tables(s, df, self.period_days)
+            self._write(path, {"Daily flow": daily, "Summary": summary})
+
+    def export_gage_table(self):
+        if not self.sites:
+            messagebox.showinfo(APP_TITLE, "No gage data loaded yet.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Export gage table", defaultextension=".xlsx", filetypes=self.EXPORT_TYPES,
+            initialfile="bear_river_gages.xlsx")
+        if path:
+            self._write(path, {"Gages": gage_table(self.sites)})
+
+    def _write(self, path, tables):
+        try:
+            files = write_tables(path, tables)
+        except (OSError, ValueError) as exc:  # e.g. file open in Excel
+            messagebox.showerror(APP_TITLE, f"Could not write the file:\n{exc}")
+            return
+        self.status_var.set("Exported " + ", ".join(os.path.basename(f) for f in files))
 
     def on_period_change(self, _event=None):
         self.period_days = int(self.period_var.get().split()[0])
